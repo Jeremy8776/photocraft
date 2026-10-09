@@ -2347,11 +2347,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     if t.pro {
-        widgets::panel_footer(ui, |ui| {
-            let _ = icons::button(ui, "trash", 26.0, false, tl!("Delete current state"));
-            let _ = icons::button(ui, "scan", 26.0, false, tl!("Create new snapshot"));
-            let _ = icons::button(ui, "file-plus", 26.0, false, tl!("Create new document from current state"));
-        });
+        crate::history_footer::show(app, ui);
     }
     // An open Free Transform owns Undo (transform_tool::intercept): stepping the document's history under
     // its box would leave it transforming pixels that changed.

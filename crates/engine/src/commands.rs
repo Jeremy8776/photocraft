@@ -1095,6 +1095,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::filters_ext::specs());
     v.extend(crate::color_to_alpha_cmds::specs());
     v.extend(crate::gallery_cmds::specs());
+    v.extend(crate::history_cmds::specs());
     v.extend(crate::gradient_fill_cmds::specs());
     v.extend(crate::type_cmds::specs());
     v.extend(crate::transform_cmds::specs());
