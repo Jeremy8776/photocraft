@@ -2767,6 +2767,9 @@ mod tests {
         let menu = app.ui.canvas_tool_menu.clone().unwrap();
         assert!(crate::canvas_tool_menu::rows(&menu).iter().flatten().any(|e| e.1 == "edit.transform.warp"));
         assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"));
+        // Only the current mode (Free Transform) is checked: not Scale, Rotate or Warp.
+        let checked: Vec<&str> = crate::canvas_tool_menu::rows(&menu).iter().flatten().map(|e| e.1).filter(|id| crate::canvas_tool_menu::mode_checked(&app, &menu, id)).collect();
+        assert_eq!(checked, ["edit.freeTransform"]);
         crate::canvas_tool_menu::choose(&mut app, &ctx, "edit.transform.warp");
         assert!(app.ui.transform.as_ref().unwrap().warp.is_some());
         // Already warping: the row is no longer offered.
