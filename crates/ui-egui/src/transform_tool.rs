@@ -47,6 +47,14 @@ impl SplitTool {
     }
 }
 
+/// What a Warp-mode press grabbed. `pts0` is the mesh's control grid at the press.
+enum WarpDrag {
+    /// An anchor or handle: it follows the pointer (an anchor takes its handles along).
+    Point { index: usize, start: [f64; 2], pts0: Vec<[f64; 2]> },
+    /// Anywhere else on the grid: the surface under the pointer follows it, as in Photoshop.
+    Surface { s: f64, t: f64, start: [f64; 2], pts0: Vec<[f64; 2]> },
+}
+
 /// Preview state that isn't serialisable: the document without the transformed pixels, and
 /// full-resolution textures of those pixels (transform_tex.rs).
 pub struct TransformPreview {
@@ -55,8 +63,8 @@ pub struct TransformPreview {
     pub texture: crate::transform_tex::PreviewTextures,
     pub opacity: f32,
     gesture: Option<Gesture>,
-    /// Warp-mode drag: (control point, pointer start, mesh points at the start).
-    warp_drag: Option<(usize, [f64; 2], Vec<[f64; 2]>)>,
+    /// Warp-mode drag in progress.
+    warp_drag: Option<WarpDrag>,
     /// Armed split tool. None while the buttons are off and control points drag as usual.
     split_tool: Option<SplitTool>,
     /// Document point the split guide is following (a drag, or the hover while placing).
@@ -1162,8 +1170,15 @@ fn single_patch(mesh: &BezierMesh) -> bool {
     mesh.us.len() == 2 && mesh.vs.len() == 2
 }
 
-/// Option-click picks the split: crosswise in the open, and the perpendicular split when the
-/// pointer is close to an existing grid line.
+/// The surface parameters under `p` when it is inside the warped mesh, else None.
+fn surface_at(mesh: &BezierMesh, p: [f64; 2]) -> Option<(f64, f64)> {
+    let (s, t) = mesh.param_at(p);
+    let q = mesh.eval(s, t);
+    ((q[0] - p[0]).hypot(q[1] - p[1]) < 1.0).then_some((s, t))
+}
+
+/// Ctrl-click (or Option-click) picks the split: crosswise in the open, and the perpendicular
+/// split when the pointer is close to an existing grid line.
 fn quick_split_kind(mesh: &BezierMesh, bounds: [f64; 4], p: [f64; 2]) -> SplitTool {
     let (s, t) = mesh.param_at(p);
     let w = (bounds[2] - bounds[0]).abs().max(1.0);
@@ -1195,7 +1210,7 @@ fn split_gesture(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) 
     let armed = app.transform_preview.as_ref().and_then(|p| p.split_tool);
     let placing = app.transform_preview.as_ref().is_some_and(|p| p.split_placing);
     match ev {
-        ToolEvent::Down { x, y, .. } if armed.is_some() || mods.alt => {
+        ToolEvent::Down { x, y, .. } if armed.is_some() || mods.alt || mods.command => {
             if let Some(pv) = app.transform_preview.as_mut() {
                 pv.split_placing = true;
                 pv.split_pointer = Some([x, y]);
@@ -1233,9 +1248,10 @@ fn split_gesture(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) 
     }
 }
 
-/// Drags a warp control point. Anchors (patch corners) carry their handles along. Preset warps
-/// turn into a custom mesh on the first drag. An armed split tool (or Option) places a split
-/// where the pointer is released instead of moving a point.
+/// Drags the warp grid. A press on an anchor or handle moves that point (an anchor carries its
+/// handles along); a press anywhere else inside the grid pulls the surface under the pointer.
+/// Preset warps turn into a custom mesh when the press grabs something. An armed split tool, or
+/// Ctrl / Option held, places a split where the pointer is released instead.
 fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mods: egui::Modifiers) {
     if split_gesture(app, ev, mods) {
         return;
@@ -1246,29 +1262,37 @@ fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mods: egui::Mo
         ToolEvent::Down { x, y, .. } => {
             // A preset warp becomes a custom mesh only when the press grabs one of its points.
             let custom = if w.mesh.is_none() || w.style != WarpStyle::Custom { Warp::custom(w.to_mesh(1, 1), w.bounds) } else { w.clone() };
-            pv.warp_drag = warp_hit(&custom, [x, y], tol).map(|i| (i, [x, y], custom.mesh.as_ref().map(|m| m.points.clone()).unwrap_or_default()));
+            let pts0 = custom.mesh.as_ref().map(|m| m.points.clone()).unwrap_or_default();
+            pv.warp_drag = warp_hit(&custom, [x, y], tol).map(|index| WarpDrag::Point { index, start: [x, y], pts0: pts0.clone() }).or_else(|| {
+                let (s, t) = surface_at(custom.mesh.as_ref()?, [x, y])?;
+                Some(WarpDrag::Surface { s, t, start: [x, y], pts0 })
+            });
             if pv.warp_drag.is_some() {
                 *w = custom;
             }
         }
         ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => {
-            if let (Some((i, start, pts0)), Some(m)) = (&pv.warp_drag, w.mesh.as_mut()) {
-                let (dx, dy) = (x - start[0], y - start[1]);
-                let nx = m.nx();
-                let (ci, cj) = (i % nx, i / nx);
-                let ny = m.ny();
-                let mut moved = vec![*i];
-                if ci % 3 == 0 && cj % 3 == 0 {
-                    for (di, dj) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)] {
-                        let (a, b) = (ci as i64 + di, cj as i64 + dj);
-                        if a >= 0 && b >= 0 && (a as usize) < nx && (b as usize) < ny {
-                            moved.push(b as usize * nx + a as usize);
+            match (&pv.warp_drag, w.mesh.as_mut()) {
+                (Some(WarpDrag::Point { index: i, start, pts0 }), Some(m)) => {
+                    let (dx, dy) = (x - start[0], y - start[1]);
+                    let nx = m.nx();
+                    let (ci, cj) = (i % nx, i / nx);
+                    let ny = m.ny();
+                    let mut moved = vec![*i];
+                    if ci % 3 == 0 && cj % 3 == 0 {
+                        for (di, dj) in [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)] {
+                            let (a, b) = (ci as i64 + di, cj as i64 + dj);
+                            if a >= 0 && b >= 0 && (a as usize) < nx && (b as usize) < ny {
+                                moved.push(b as usize * nx + a as usize);
+                            }
                         }
                     }
+                    for k in moved {
+                        m.points[k] = [pts0[k][0] + dx, pts0[k][1] + dy];
+                    }
                 }
-                for k in moved {
-                    m.points[k] = [pts0[k][0] + dx, pts0[k][1] + dy];
-                }
+                (Some(WarpDrag::Surface { s, t, start, pts0 }), Some(m)) => m.pull(pts0, *s, *t, [x - start[0], y - start[1]]),
+                _ => {}
             }
             if matches!(ev, ToolEvent::Up { .. }) {
                 pv.warp_drag = None;
@@ -1323,19 +1347,22 @@ fn rotation_degrees(quad: [[f64; 2]; 4]) -> f64 {
     if dx.is_finite() && dy.is_finite() && dx.hypot(dy) > 1e-9 { dy.atan2(dx).to_degrees() } else { 0.0 }
 }
 
-/// Cursor for hovering a document point while transforming. `alt` is Option, which arms a quick
-/// split while a warp is active.
-pub fn cursor(app: &PhotocraftApp, p: [f64; 2], alt: bool) -> Option<CursorIcon> {
+/// Cursor for hovering a document point while transforming. `quick_split` is Ctrl or Option,
+/// which arms a quick split while a warp is active.
+pub fn cursor(app: &PhotocraftApp, p: [f64; 2], quick_split: bool) -> Option<CursorIcon> {
     let t = app.ui.transform.as_ref()?;
     let tol = handle_tolerance(app);
     if let Some(w) = &t.warp {
         if let Some(tool) = app.transform_preview.as_ref().and_then(|pv| pv.split_tool) {
             return Some(split_cursor(tool));
         }
-        if alt {
+        if quick_split {
             return Some(split_cursor(quick_split_kind(&w.to_mesh(1, 1), w.bounds, p)));
         }
-        return Some(if w.style != WarpStyle::Custom || warp_hit(w, p, tol).is_some() { CursorIcon::Crosshair } else { CursorIcon::Default });
+        if w.style != WarpStyle::Custom || warp_hit(w, p, tol).is_some() {
+            return Some(CursorIcon::Crosshair);
+        }
+        return Some(if w.mesh.as_ref().and_then(|m| surface_at(m, p)).is_some() { CursorIcon::Grab } else { CursorIcon::Default });
     }
     let h = hit(t, p, tol);
     if !distort_allows(t.mode, h) {
@@ -1365,7 +1392,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     if let Some(w) = &t.warp {
         let over_canvas = painter.ctx().input(|i| i.pointer.hover_pos()).filter(|p| xf.rect.contains(*p)).map(|p| xf.to_doc(p));
         let at = pv.split_pointer.or(over_canvas);
-        let alt = painter.ctx().input(|i| i.modifiers.alt);
+        let alt = painter.ctx().input(|i| i.modifiers.alt || i.modifiers.command);
         let guide = at.and_then(|p| {
             let tool = pv.split_tool.or_else(|| (alt || pv.split_quick).then(|| quick_split_kind(&w.to_mesh(1, 1), w.bounds, p)));
             tool.map(|tool| (tool, p))
@@ -2984,6 +3011,57 @@ mod tests {
         assert!(app.ui.transform.as_ref().unwrap().warp.is_none());
     }
 
+    fn warping_square() -> PhotocraftApp {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
+        begin_warp(&mut app, &egui::Context::default()).unwrap();
+        app
+    }
+
+    fn warp_mesh(app: &PhotocraftApp) -> BezierMesh {
+        app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().mesh.clone().unwrap()
+    }
+
+    #[test]
+    fn warp_drag_from_inside_the_grid_pulls_the_surface_under_the_pointer() {
+        let mut app = warping_square();
+        let before = warp_mesh(&app);
+        // (20, 20) is mid-cell, far from every anchor and handle.
+        warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
+        assert!(matches!(app.transform_preview.as_ref().unwrap().warp_drag, Some(WarpDrag::Surface { .. })));
+        warp_pointer(&mut app, ToolEvent::Move { x: 30.0, y: 14.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
+        warp_pointer(&mut app, ToolEvent::Up { x: 30.0, y: 14.0 }, 2.0, egui::Modifiers::NONE);
+        let after = warp_mesh(&app);
+        let (s, t) = surface_at(&before, [20.0, 20.0]).unwrap();
+        let moved = after.eval(s, t);
+        assert!((moved[0] - 30.0).abs() < 1e-6 && (moved[1] - 14.0).abs() < 1e-6, "{moved:?}");
+        assert!(app.transform_preview.as_ref().unwrap().warp_drag.is_none());
+        // The box corners barely move: the pull is local to the grabbed patch.
+        assert!(after.points[0] != before.points[0] || after.points[15] != before.points[15]);
+    }
+
+    #[test]
+    fn warp_press_outside_the_grid_grabs_nothing() {
+        let mut app = warping_square();
+        let before = warp_mesh(&app);
+        warp_pointer(&mut app, ToolEvent::Down { x: 55.0, y: 55.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
+        assert!(app.transform_preview.as_ref().unwrap().warp_drag.is_none());
+        warp_pointer(&mut app, ToolEvent::Up { x: 60.0, y: 60.0 }, 2.0, egui::Modifiers::NONE);
+        assert_eq!(warp_mesh(&app), before);
+    }
+
+    #[test]
+    fn ctrl_click_cuts_the_grid_both_ways() {
+        let mut app = warping_square();
+        let ctrl = egui::Modifiers::COMMAND;
+        warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, 2.0, ctrl);
+        warp_pointer(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, 2.0, ctrl);
+        let m = warp_mesh(&app);
+        // A cut each way at the pointer (the default grid's rule-of-thirds guides become real
+        // lines too, as with the Cross split tool).
+        assert!(m.us.iter().any(|u| (u - 0.5).abs() < 1e-6), "vertical cut: {:?}", m.us);
+        assert!(m.vs.iter().any(|v| (v - 0.5).abs() < 1e-6), "horizontal cut: {:?}", m.vs);
+    }
+
     #[test]
     fn replacing_the_warp_mesh_cancels_a_pending_point_drag() {
         let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
@@ -2994,7 +3072,7 @@ mod tests {
         }
 
         pointer(&mut app, ToolEvent::Down { x: 32.0, y: 32.0, pressure: 1.0 }, egui::Modifiers::NONE);
-        assert!(app.transform_preview.as_ref().unwrap().warp_drag.is_some(), "the anchor drag is armed");
+        assert!(matches!(app.transform_preview.as_ref().unwrap().warp_drag, Some(WarpDrag::Point { .. })), "the anchor drag is armed");
 
         split(&mut app, "edit.transform.removeWarpSplit", None).unwrap();
         assert!(app.transform_preview.as_ref().unwrap().warp_drag.is_none(), "the old mesh index is discarded");
@@ -3006,7 +3084,7 @@ mod tests {
     /// A press on a preset warp that misses its points leaves the preset alone (no invisible undo
     /// step); grabbing a point turns it into a custom mesh.
     #[test]
-    fn a_press_on_a_preset_warp_converts_it_only_when_it_grabs_a_point() {
+    fn a_press_on_a_preset_warp_converts_it_only_when_it_grabs_the_grid() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
         app.sync_views();
@@ -3021,9 +3099,15 @@ mod tests {
         let t = app.ui.transform.as_mut().unwrap();
         let preset = Warp::preset(WarpStyle::Arc, 50.0, t.rect);
         t.warp = Some(preset.clone());
-        warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
-        warp_pointer(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, 2.0, egui::Modifiers::NONE);
+        // Off the grid altogether: a miss.
+        warp_pointer(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
+        warp_pointer(&mut app, ToolEvent::Up { x: 60.0, y: 60.0 }, 2.0, egui::Modifiers::NONE);
         assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref(), Some(&preset), "a miss changes nothing");
+        // Inside the grid, away from every point: the surface is grabbed, so the preset converts.
+        warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
+        assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().style, WarpStyle::Custom);
+        warp_pointer(&mut app, ToolEvent::Up { x: 20.0, y: 20.0 }, 2.0, egui::Modifiers::NONE);
+        app.ui.transform.as_mut().unwrap().warp = Some(preset.clone());
         let corner = preset.to_mesh(1, 1).points[15];
         warp_pointer(&mut app, ToolEvent::Down { x: corner[0], y: corner[1], pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
         assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().style, WarpStyle::Custom);

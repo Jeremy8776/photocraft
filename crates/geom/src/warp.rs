@@ -512,6 +512,34 @@ impl BezierMesh {
         (s, t)
     }
 
+    /// Pulls the surface point at normalised `(s, t)` by `d`, as dragging the grid anywhere inside
+    /// a patch does in Photoshop. `base` is the control grid at the start of the drag. The move is
+    /// spread over the patch's 16 control points by the point's Bernstein weights (the smallest
+    /// change that puts the point exactly at `base` + `d`), so the pull is smooth and stays inside
+    /// the patch and its neighbours.
+    pub fn pull(&mut self, base: &[[f64; 2]], s: f64, t: f64, d: [f64; 2]) {
+        if base.len() != self.points.len() || !d.iter().all(|v| v.is_finite()) {
+            return;
+        }
+        self.points.copy_from_slice(base);
+        let (pi, a) = Self::locate(&self.us, s);
+        let (pj, b) = Self::locate(&self.vs, t);
+        let (ba, bb) = (bernstein(a), bernstein(b));
+        let norm: f64 = bb.iter().flat_map(|wb| ba.iter().map(move |wa| (wa * wb).powi(2))).sum();
+        if norm <= 0.0 {
+            return;
+        }
+        let nx = self.nx();
+        for (j, wb) in bb.iter().enumerate() {
+            for (i, wa) in ba.iter().enumerate() {
+                let k = wa * wb / norm;
+                let p = &mut self.points[(3 * pj + j) * nx + 3 * pi + i];
+                p[0] += d[0] * k;
+                p[1] += d[1] * k;
+            }
+        }
+    }
+
     /// Bounding box of the control points (the surface lies inside it).
     pub fn control_bounds(&self) -> [f64; 4] {
         self.points.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])])
@@ -650,6 +678,25 @@ mod tests {
     use super::*;
 
     const B: [f64; 4] = [10.0, 20.0, 110.0, 70.0];
+
+    #[test]
+    fn pull_moves_the_grabbed_surface_point_exactly_and_stays_local() {
+        let base = BezierMesh::identity(B, 3, 2);
+        for (s, t) in [(0.5, 0.5), (0.1, 0.9), (0.4, 0.25), (0.0, 0.0), (1.0, 1.0)] {
+            let mut m = base.clone();
+            let before = base.eval(s, t);
+            m.pull(&base.points, s, t, [7.0, -4.5]);
+            let after = m.eval(s, t);
+            assert!((after[0] - before[0] - 7.0).abs() < 1e-9 && (after[1] - before[1] + 4.5).abs() < 1e-9, "({s}, {t}): {after:?}");
+        }
+        // Only the grabbed patch's 16 control points change.
+        let mut m = base.clone();
+        m.pull(&base.points, 0.5, 0.25, [5.0, 5.0]);
+        assert!(m.points.iter().zip(&base.points).filter(|(a, b)| a != b).count() <= 16);
+        // Pulling again from the same base replaces the pull (a drag is not cumulative).
+        m.pull(&base.points, 0.5, 0.25, [0.0, 0.0]);
+        assert_eq!(m, base);
+    }
 
     fn close(a: (f64, f64), b: (f64, f64), eps: f64) -> bool {
         (a.0 - b.0).abs() < eps && (a.1 - b.1).abs() < eps
