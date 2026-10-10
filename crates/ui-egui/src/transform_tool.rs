@@ -2758,6 +2758,32 @@ mod tests {
         assert_eq!(app.ui.transform.as_ref().unwrap().mode, TransformMode::Distort);
     }
 
+    #[test]
+    fn right_click_menu_warp_row_enters_warp_mode() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let ctx = egui::Context::default();
+        begin(&mut app, &ctx).unwrap();
+        assert!(crate::canvas_tool_menu::open_transform(&mut app, [10.0, 10.0]));
+        let menu = app.ui.canvas_tool_menu.clone().unwrap();
+        assert!(crate::canvas_tool_menu::rows(&menu).iter().flatten().any(|e| e.1 == "edit.transform.warp"));
+        assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"));
+        crate::canvas_tool_menu::choose(&mut app, &ctx, "edit.transform.warp");
+        assert!(app.ui.transform.as_ref().unwrap().warp.is_some());
+        // Already warping: the row is no longer offered.
+        assert!(!crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"));
+    }
+
+    #[test]
+    fn right_click_menu_warp_row_is_off_for_a_lone_path() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let ctx = egui::Context::default();
+        begin(&mut app, &ctx).unwrap();
+        app.ui.transform.as_mut().unwrap().path = Some(json!({}));
+        assert!(crate::canvas_tool_menu::open_transform(&mut app, [10.0, 10.0]));
+        let menu = app.ui.canvas_tool_menu.clone().unwrap();
+        assert!(!crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"));
+    }
+
     fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": size, "height": size})).unwrap();

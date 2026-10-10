@@ -32,6 +32,7 @@ pub const TRANSFORM_MENU: &[Row] = &[
     Some(("Skew", "edit.transform.skew")),
     Some(("Distort", "edit.transform.distort")),
     Some(("Perspective", "edit.transform.perspective")),
+    Some(("Warp", "edit.transform.warp")),
 ];
 
 /// Photoshop's selection-tool context menu with an active selection, in its order. Its Generative
@@ -157,6 +158,10 @@ pub fn open_transform(app: &mut PhotocraftApp, pos: [f32; 2]) -> bool {
 }
 
 pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    // Warp needs a layer or selection box: a lone mask, channel or path keeps the plain box.
+    if menu.transform && command == "edit.transform.warp" {
+        return app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none() && t.target.is_none() && t.path.is_none());
+    }
     if menu.transform || menu.tool != Tool::Pen {
         return crate::menus::is_enabled(app, command);
     }
