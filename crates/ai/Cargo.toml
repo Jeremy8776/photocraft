@@ -1,0 +1,9 @@
+[package]
+name = "photocraft-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Generative AI port for PhotoCraft: the backend trait, request preparation (selection to mask, context region, size caps), result blending, and a scripted mock backend. No dependencies."
+
+[lints]
+workspace = true

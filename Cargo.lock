@@ -4223,6 +4223,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "photocraft-ai"
+version = "0.6.0"
+
+[[package]]
 name = "photocraft-algo"
 version = "0.6.0"
 dependencies = [
@@ -4342,6 +4346,7 @@ dependencies = [
  "exr",
  "flate2",
  "photocraft-affinity",
+ "photocraft-ai",
  "photocraft-algo",
  "photocraft-cms",
  "photocraft-codecs",

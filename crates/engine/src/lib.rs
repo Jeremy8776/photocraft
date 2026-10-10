@@ -10,6 +10,7 @@
 pub mod actions_cmds;
 pub mod adjust_cmds;
 pub mod adjust_params;
+pub mod ai_cmds;
 pub mod align_cmds;
 mod allocation;
 pub mod analysis_cmds;
@@ -368,6 +369,8 @@ pub struct Session {
     /// the same check a top-level request sees. `None` runs everything, which is what a local
     /// UI and `photocraft-cli run` do.
     pub authorize: Option<fn(&str, &serde_json::Value) -> Result<()>>,
+    /// Generative Fill: the connected AI model (see `ai_cmds`).
+    pub ai: ai_cmds::AiState,
     /// Background jobs (see [`jobs`]).
     jobs: jobs::Jobs,
 }
