@@ -1672,6 +1672,8 @@ fn readout(t: &TransformSession) -> (f64, f64, f64, f64) {
 
 /// Width of the mode, cancel and commit cluster kept on the right of the options bar.
 const ACTIONS_W: f32 = 140.0;
+/// Width of the action buttons when they follow the Warp fields (one more than the box bar: Reset).
+const WARP_ACTIONS_W: f32 = 176.0;
 
 /// Reach of the reference point X/Y fields: the largest document side (`image.canvasSize`'s limit).
 const POSITION_LIMIT_PX: f32 = 300_000.0;
@@ -1689,26 +1691,29 @@ fn scale_limit_pct(side: f64) -> f32 {
     ((f64::from(POSITION_LIMIT_PX) / side * 100.0) as f32).clamp(100.0, SCALE_LIMIT_PCT)
 }
 
-/// Options bar while transforming: reference point X/Y, W/H %, angle, interpolation, and, pinned
-/// to the right, the warp switch, cancel and commit.
+/// Options bar while transforming: the fields (reference point X/Y, W/H %, angle, interpolation,
+/// or the warp controls), then the mode switch, cancel and commit right after them. A bar too
+/// narrow for both pins the buttons to the right edge and clips the fields, so Commit and Cancel
+/// are always reachable.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let Some(t) = app.ui.transform.clone() else { return };
     let bar = ui.available_rect_before_wrap();
-    let split = (bar.right() - ACTIONS_W).max(bar.left());
+    let warping = t.warp.is_some();
+    let buttons_w = if warping { WARP_ACTIONS_W } else { ACTIONS_W };
+    let split = (bar.right() - buttons_w).max(bar.left());
     let fields = egui::Rect::from_min_max(bar.min, egui::pos2(split, bar.bottom()));
-    let actions = egui::Rect::from_min_max(egui::pos2(split, bar.top()), bar.max);
-    {
-        let mut row =
-            ui.new_child(egui::UiBuilder::new().id_salt("transform-fields").max_rect(fields).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        row.set_clip_rect(fields);
-        if let Some(w) = t.warp.clone() {
-            warp_fields(app, &mut row, &w);
-        } else {
-            transform_fields(app, &mut row, &t);
-        }
+    let mut row = ui.new_child(egui::UiBuilder::new().id_salt("transform-fields").max_rect(fields).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    row.set_clip_rect(fields);
+    if let Some(w) = t.warp.clone() {
+        warp_fields(app, &mut row, &w);
+    } else {
+        transform_fields(app, &mut row, &t);
     }
-    let mut row = ui.new_child(egui::UiBuilder::new().id_salt("transform-actions").max_rect(actions).layout(egui::Layout::right_to_left(egui::Align::Center)));
-    transform_actions(app, &mut row, t.warp.is_some());
+    crate::widgets::vline(&mut row, 22.0);
+    let start = row.min_rect().right().min(split);
+    let actions = egui::Rect::from_min_max(egui::pos2(start, bar.top()), egui::pos2(start + buttons_w, bar.bottom()));
+    let mut btns = ui.new_child(egui::UiBuilder::new().id_salt("transform-actions").max_rect(actions).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    transform_actions(app, &mut btns, warping);
 }
 
 fn transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession) {
@@ -1779,6 +1784,47 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
     let lbl = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(s).color(tk.text_dim).size(12.0));
     };
+    // Split, Grid, then the warp style with its bend fields.
+    lbl(ui, tl!("Split:"));
+    let armed = app.transform_preview.as_ref().and_then(|p| p.split_tool);
+    for (tool, tip) in [
+        (SplitTool::Cross, tl!("Split Warp Crosswise")),
+        (SplitTool::Vertical, tl!("Split Warp Vertically")),
+        (SplitTool::Horizontal, tl!("Split Warp Horizontally")),
+    ] {
+        let on = armed == Some(tool);
+        if split_icon(ui, tool.icon(), tip, on).clicked()
+            && let Some(pv) = app.transform_preview.as_mut()
+        {
+            pv.split_tool = if on { None } else { Some(tool) };
+            pv.split_placing = false;
+            pv.split_pointer = None;
+            pv.split_quick = false;
+        }
+    }
+    crate::widgets::vline(ui, 22.0);
+    lbl(ui, tl!("Grid:"));
+    let mesh = w.mesh.clone().unwrap_or_else(|| BezierMesh::identity(w.bounds, 1, 1));
+    let mut grid = warp_grid_id(&mesh).to_string();
+    let opts = [
+        ("custom".to_string(), tl!("Custom")),
+        ("default".to_string(), tl!("Default")),
+        ("3".to_string(), tl!("3 x 3")),
+        ("4".to_string(), tl!("4 x 4")),
+        ("5".to_string(), tl!("5 x 5")),
+    ];
+    if crate::widgets::dropdown(ui, "warp-grid", &mut grid, &opts, 92.0)
+        && let Some(n) = match grid.as_str() {
+            "default" => Some(1),
+            "3" => Some(3),
+            "4" => Some(4),
+            "5" => Some(5),
+            _ => None,
+        }
+    {
+        let _ = edit_session_warp(app, "edit.transform.warpGrid", &json!({ "size": n }));
+    }
+    crate::widgets::vline(ui, 22.0);
     lbl(ui, tl!("Warp:"));
     let mut style = w.style;
     let opts: Vec<(WarpStyle, &str)> = WarpStyle::all().map(|s| (s, s.label())).collect();
@@ -1792,12 +1838,15 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
             s => Warp { style: s, bend: if w.style.is_preset() { w.bend } else { 50.0 }, ..Warp::none(b) },
         });
     }
-    if w.style.is_preset() {
-        let mut vertical = w.vertical;
-        if crate::widgets::checkbox(ui, &mut vertical, tl!("Vertical")).changed()
+    // Orientation and the bend fields are always there, and only act on a preset style.
+    let preset = w.style.is_preset();
+    ui.add_enabled_ui(preset, |ui| {
+        let orient = crate::icons::button(ui, "arrow-left-right", 26.0, w.vertical, tl!("Vertical"));
+        orient.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, preset, "Change warp orientation"));
+        if orient.clicked()
             && let Some(Some(cur)) = app.ui.transform.as_mut().map(|t| t.warp.as_mut())
         {
-            cur.vertical = vertical;
+            cur.vertical = !cur.vertical;
         }
         let fields: [(&str, f64); 3] = [(tl!("Bend:"), w.bend), ("H:", w.h_distort), ("V:", w.v_distort)];
         for (k, (name, v)) in fields.iter().enumerate() {
@@ -1813,47 +1862,23 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
                 }
             }
         }
-    } else {
-        crate::widgets::vline(ui, 22.0);
-        lbl(ui, tl!("Split:"));
-        let armed = app.transform_preview.as_ref().and_then(|p| p.split_tool);
-        for (tool, tip) in [
-            (SplitTool::Cross, tl!("Split Warp Crosswise")),
-            (SplitTool::Vertical, tl!("Split Warp Vertically")),
-            (SplitTool::Horizontal, tl!("Split Warp Horizontally")),
-        ] {
-            let on = armed == Some(tool);
-            if split_icon(ui, tool.icon(), tip, on).clicked()
-                && let Some(pv) = app.transform_preview.as_mut()
-            {
-                pv.split_tool = if on { None } else { Some(tool) };
-                pv.split_placing = false;
-                pv.split_pointer = None;
-                pv.split_quick = false;
-            }
-        }
-        crate::widgets::vline(ui, 22.0);
-        lbl(ui, tl!("Grid:"));
-        let mesh = w.mesh.clone().unwrap_or_else(|| BezierMesh::identity(w.bounds, 1, 1));
-        let mut grid = warp_grid_id(&mesh).to_string();
-        let opts = [
-            ("custom".to_string(), tl!("Custom")),
-            ("default".to_string(), tl!("Default")),
-            ("3".to_string(), tl!("3 x 3")),
-            ("4".to_string(), tl!("4 x 4")),
-            ("5".to_string(), tl!("5 x 5")),
-        ];
-        if crate::widgets::dropdown(ui, "warp-grid", &mut grid, &opts, 92.0)
-            && let Some(n) = match grid.as_str() {
-                "default" => Some(1),
-                "3" => Some(3),
-                "4" => Some(4),
-                "5" => Some(5),
-                _ => None,
-            }
-        {
-            let _ = edit_session_warp(app, "edit.transform.warpGrid", &json!({ "size": n }));
-        }
+    });
+}
+
+/// Back to the untouched box: the default one-patch grid over the box, no bend.
+pub fn reset_warp(app: &mut PhotocraftApp) {
+    let Some(t) = app.ui.transform.as_mut() else { return };
+    if t.warp.is_none() {
+        return;
+    }
+    let b = t.rect;
+    t.warp = Some(Warp::custom(BezierMesh::identity(b, 1, 1), b));
+    if let Some(pv) = app.transform_preview.as_mut() {
+        pv.warp_drag = None;
+        pv.split_tool = None;
+        pv.split_pointer = None;
+        pv.split_placing = false;
+        pv.split_quick = false;
     }
 }
 
@@ -1927,6 +1952,13 @@ fn transform_actions(app: &mut PhotocraftApp, ui: &mut egui::Ui, warping: bool) 
     cancel_btn.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Cancel transform"));
     if cancel_btn.clicked() {
         cancel(app);
+    }
+    if warping {
+        let reset = crate::icons::button(ui, "undo-2", 26.0, false, tl!("Reset"));
+        reset.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Reset warp"));
+        if reset.clicked() {
+            reset_warp(app);
+        }
     }
     crate::widgets::vline(ui, 22.0);
     let mode = crate::icons::button(ui, "grid-3x3", 26.0, warping, tl!("Switch between free transform and warp modes"));
@@ -2039,6 +2071,58 @@ mod tests {
         h.get_by_label("Cancel transform").click();
         h.run_steps(2);
         assert!(h.state().ui.transform.is_none());
+    }
+
+    #[test]
+    fn free_transform_bar_buttons_follow_the_fields_on_a_wide_bar() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.transform = Some(session());
+        let width = 2400.0;
+        let mut h = Harness::builder().with_size(vec2(width, 48.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                ui.horizontal_centered(|ui| options_bar(app, ui));
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(6);
+        let commit = h.get_by_label("Commit transform").rect();
+        assert!(commit.right() < width * 0.7, "commit sits next to the fields, not at the far right: {commit:?}");
+    }
+
+    #[test]
+    fn warp_bar_buttons_follow_the_fields_on_a_wide_bar() {
+        use egui_kittest::Harness;
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.transform = Some(session());
+        let width = 2000.0;
+        let mut h = Harness::builder().with_size(vec2(width, 48.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                ui.horizontal_centered(|ui| options_bar(app, ui));
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(6);
+        h.get_by_label("Switch between free transform and warp modes").click();
+        h.run_steps(4);
+        assert!(h.state().ui.transform.as_ref().unwrap().warp.is_some());
+        let commit = h.get_by_label("Commit transform").rect();
+        assert!(commit.right() < width / 2.0, "commit sits next to the fields, not at the far right: {commit:?}");
+        let reset = h.get_by_label("Reset warp").rect();
+        assert!(reset.right() < commit.left() + 1.0, "reset is left of commit");
+        h.get_by_label("Reset warp").click();
+        h.run_steps(2);
+        assert!(h.state().ui.transform.as_ref().unwrap().warp.as_ref().unwrap().is_identity());
     }
 
     /// Types `text` + Enter into the `n`th numeric field of the transform bar (X, Y, W, H, angle…).
@@ -3087,6 +3171,23 @@ mod tests {
         assert_eq!(handle_anchor(1, 0), (0, 0));
         assert_eq!(handle_anchor(5, 3), (6, 3));
         assert_eq!(handle_anchor(3, 3), (3, 3));
+    }
+
+    #[test]
+    fn reset_warp_returns_to_the_untouched_grid_and_keeps_the_session() {
+        let mut app = warping_square();
+        warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, 2.0, egui::Modifiers::NONE);
+        warp_pointer(&mut app, ToolEvent::Up { x: 30.0, y: 14.0 }, 2.0, egui::Modifiers::NONE);
+        assert!(!app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().is_identity());
+        reset_warp(&mut app);
+        let w = app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap();
+        assert!(w.is_identity(), "back to the untouched box");
+        assert_eq!(w.mesh.as_ref().map(|m| (m.us.len(), m.vs.len())), Some((2, 2)));
+        assert!(app.transform_preview.as_ref().unwrap().warp_drag.is_none());
+        // Not warping: nothing to reset.
+        leave_warp(&mut app);
+        reset_warp(&mut app);
+        assert!(app.ui.transform.as_ref().unwrap().warp.is_none());
     }
 
     #[test]
