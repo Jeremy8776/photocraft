@@ -1539,6 +1539,54 @@ fn draw_rotate_feedback(painter: &egui::Painter, at: Pos2, angle: Option<f64>, b
 /// boundaries are solid. A single patch (Grid › Default) also draws its rule-of-thirds guides;
 /// 3×3, 4×4 and 5×5 are just those even cells, with an anchor at every intersection. `guide` is
 /// the split line following the pointer.
+/// How near the pointer (screen px) a handle's anchor or the handle itself must be for the
+/// handle to show. Everything else stays out of the way: only anchors are always drawn.
+const HANDLE_REVEAL_PX: f32 = 56.0;
+
+/// The anchor a handle belongs to, as `(i, j)` in the control grid (an anchor is its own).
+fn handle_anchor(i: usize, j: usize) -> (usize, usize) {
+    if i.is_multiple_of(3) {
+        (i, if j % 3 == 0 { j } else if j % 3 == 1 { j - 1 } else { j + 1 })
+    } else {
+        (if i % 3 == 1 { i - 1 } else { i + 1 }, j)
+    }
+}
+
+/// Anchors always, small and quiet. A handle and its arm show only while the pointer is close to
+/// them or they are being dragged, so a dense grid does not bury the picture in dots.
+fn draw_warp_points(painter: &egui::Painter, m: &BezierMesh, scr: impl Fn([f64; 2]) -> Pos2, pv: &TransformPreview, line: Stroke) {
+    let (nx, ny) = (m.nx(), m.ny());
+    let hover = painter.ctx().input(|i| i.pointer.hover_pos());
+    let dragged = match &pv.warp_drag {
+        Some(WarpDrag::Point { index, .. }) => Some(handle_anchor(index % nx, index / nx)),
+        _ => None,
+    };
+    let near = |p: Pos2| hover.is_some_and(|h| h.distance(p) <= HANDLE_REVEAL_PX);
+    let faint = Stroke::new(0.75, line.color.gamma_multiply(0.8));
+    for j in 0..ny {
+        for i in 0..nx {
+            if !on_section_edge(i, j) {
+                continue;
+            }
+            let p = scr(m.point(i, j));
+            if i.is_multiple_of(3) && j.is_multiple_of(3) {
+                let r = egui::Rect::from_center_size(p, vec2(5.0, 5.0));
+                painter.rect_filled(r, 0.0, Color32::WHITE);
+                painter.rect_stroke(r, 0.0, faint, egui::StrokeKind::Inside);
+                continue;
+            }
+            let (ai, aj) = handle_anchor(i, j);
+            let a = scr(m.point(ai, aj));
+            if !(near(p) || near(a) || dragged == Some((ai, aj))) {
+                continue;
+            }
+            painter.line_segment([a, p], faint);
+            painter.circle_filled(p, 2.75, Color32::WHITE);
+            painter.circle_stroke(p, 2.75, faint);
+        }
+    }
+}
+
 fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &Warp, pv: &TransformPreview, guide: Option<(SplitTool, [f64; 2])>) {
     let scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     let r = t.rect;
@@ -1600,27 +1648,7 @@ fn draw_warp(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, w: &
         painter.add(egui::Shape::line(curve(None, Some(win[1])), line));
     }
     if w.style == WarpStyle::Custom {
-        let (nx, ny) = (m.nx(), m.ny());
-        for j in 0..ny {
-            for i in 0..nx {
-                if !on_section_edge(i, j) {
-                    continue;
-                }
-                let p = scr(m.point(i, j));
-                let anchor = i.is_multiple_of(3) && j.is_multiple_of(3);
-                if anchor {
-                    let r = egui::Rect::from_center_size(p, vec2(7.0, 7.0));
-                    painter.rect_filled(r, 0.0, Color32::WHITE);
-                    painter.rect_stroke(r, 0.0, line, egui::StrokeKind::Inside);
-                } else {
-                    // Arm to the nearest anchor along the row/column.
-                    let (ai, aj) = if i.is_multiple_of(3) { (i, if j % 3 == 1 { j - 1 } else { j + 1 }) } else { (if i % 3 == 1 { i - 1 } else { i + 1 }, j) };
-                    painter.line_segment([scr(m.point(ai, aj)), p], line);
-                    painter.circle_filled(p, 3.5, Color32::WHITE);
-                    painter.circle_stroke(p, 3.5, line);
-                }
-            }
-        }
+        draw_warp_points(painter, &m, scr, pv, line);
     }
     if let Some((tool, p)) = guide {
         let (s, t) = m.param_at(p);
@@ -3037,6 +3065,15 @@ mod tests {
         assert!(app.transform_preview.as_ref().unwrap().warp_drag.is_none());
         // The box corners barely move: the pull is local to the grabbed patch.
         assert!(after.points[0] != before.points[0] || after.points[15] != before.points[15]);
+    }
+
+    #[test]
+    fn a_handle_belongs_to_the_anchor_it_hangs_off() {
+        assert_eq!(handle_anchor(0, 1), (0, 0));
+        assert_eq!(handle_anchor(0, 2), (0, 3));
+        assert_eq!(handle_anchor(1, 0), (0, 0));
+        assert_eq!(handle_anchor(5, 3), (6, 3));
+        assert_eq!(handle_anchor(3, 3), (3, 3));
     }
 
     #[test]
