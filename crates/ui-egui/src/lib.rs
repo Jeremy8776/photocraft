@@ -133,6 +133,14 @@ pub mod retouch_ui;
 mod rgb_histogram;
 pub mod rotate_view;
 pub mod rulers;
+#[cfg(not(target_arch = "wasm32"))]
+mod sam3_panel;
+#[cfg(not(target_arch = "wasm32"))]
+mod sam3_prompts;
+#[cfg(not(target_arch = "wasm32"))]
+mod sam3_selection;
+#[cfg(not(target_arch = "wasm32"))]
+mod sam3_server;
 pub mod screen_picker;
 pub mod scrollbars;
 pub mod served_fonts;
@@ -430,6 +438,8 @@ pub struct PhotocraftApp {
     pub(crate) shape_stroke_preview: Option<shape_stroke_ui::ShapeStrokePreview>,
     /// The pixels a Magnetic Lasso border follows (`magnetic_lasso_ui`).
     pub(crate) magnetic: magnetic_lasso_ui::Runtime,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) sam3: sam3_selection::Runtime,
     /// The next tool `Down` is a right-button drag that erases (see `paint_mouse`).
     secondary_erase: bool,
     /// While a batch of recovered pointer samples is replayed, defer the live-stroke update to one
@@ -629,6 +639,8 @@ impl PhotocraftApp {
             patch_preview: None,
             shape_stroke_preview: None,
             magnetic: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            sam3: Default::default(),
             secondary_erase: false,
             defer_live_stroke: false,
             press_stroke: false,
@@ -780,6 +792,10 @@ impl PhotocraftApp {
 
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if id == "select.subject" && sam3_panel::select_subject(self) {
+            return Ok(serde_json::json!({"queued": "sam3"}));
+        }
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -1392,6 +1408,12 @@ impl eframe::App for PhotocraftApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
         self.poll_file_dialog(ctx, Some(frame));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut sam3 = std::mem::take(&mut self.sam3);
+            sam3.tick(self, ctx);
+            self.sam3 = sam3;
+        }
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
@@ -1423,6 +1445,25 @@ impl eframe::App for PhotocraftApp {
             ctx.request_repaint();
             self.automation_input = false;
             return;
+        }
+        // SAM 3 Object Selection: keyboard control of the accumulating prompt, before any text edit
+        // could take the keys (a focused TextEdit consumes Enter, Backspace and Escape itself).
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.ui.tool == state::Tool::ObjectSelection && !ctx.text_edit_focused() && !self.ui.text_edit.is_some() {
+            let size = self.session.active().map(|st| [st.doc.size.width, st.doc.size.height]);
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter))
+                && let Some(size) = size
+                && self.sam3.commit(size)
+            {
+                self.ui.status = "Selecting object with SAM 3…".into();
+                self.ui.status_error = false;
+            }
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)) {
+                self.sam3.undo_point();
+            }
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.sam3.clear_prompt();
+            }
         }
         let t0 = gpu_canvas::now_ms();
         // Each painting tool keeps its own brush (#218), so switch the active tool's brush in
@@ -1478,6 +1519,8 @@ impl eframe::App for PhotocraftApp {
         gradient_ui::editor_window(self, &ctx);
         type_panels_ui::windows(self, &ctx);
         analysis_ui::windows(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        sam3_panel::show(self, &ctx);
         timeline_ui::windows(self, &ctx);
         workspace_ui::windows(self, &ctx);
         palette::show(self, &ctx);

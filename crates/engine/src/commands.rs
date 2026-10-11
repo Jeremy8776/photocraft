@@ -1140,6 +1140,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::vector_cmds::specs());
     v.extend(crate::path_edit_cmds::specs());
     v.extend(crate::smartselect_cmds::specs());
+    v.extend(crate::sam3_select_cmds::specs());
     v.extend(crate::cutout_cmds::specs());
     v.extend(crate::ai_cmds::specs());
     v.extend(crate::symmetry_cmds::specs());

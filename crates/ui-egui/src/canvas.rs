@@ -2492,6 +2492,18 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
     }
     crate::color_range_ui::paint_selection_preview(app, &ctx, &painter, doc.id, img_rect, flip);
+    #[cfg(not(target_arch = "wasm32"))]
+    if primary
+        && app.ui.tool == Tool::ObjectSelection
+        && let Some(tex) = app.sam3.overlay()
+    {
+        let uv = if flip { Rect::from_min_max(pos2(1.0, 0.0), pos2(0.0, 1.0)) } else { Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)) };
+        if view.rotation.abs() > 0.05 {
+            paint_mapped_image(&painter, &xf, tex, uv, [doc.size.width as f32, doc.size.height as f32], Color32::WHITE);
+        } else {
+            painter.image(tex, img_rect, uv, Color32::WHITE);
+        }
+    }
     // Artboards: pasteboard between the boards, outlines and names (artboard_ui.rs).
     if doc.has_artboards() {
         let t = crate::theme::Tokens::get(&ctx);
@@ -3218,6 +3230,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     if primary {
         app.perf.span("scrollbars", crate::gpu_canvas::now_ms() - t0);
         app.hover_doc = response.hover_pos().map(|p| xf.to_doc(p));
+        #[cfg(not(target_arch = "wasm32"))]
+        if app.ui.tool == Tool::ObjectSelection {
+            app.sam3.hover([doc.size.width, doc.size.height], app.hover_doc, &ctx);
+        }
     }
     if primary && app.ui.extras.rulers {
         crate::rulers::draw_rulers(app, ui, full, &xf);
@@ -4408,7 +4424,27 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
         return;
     }
     match d.tool {
-        Tool::ObjectSelection => crate::retouch_ui::finish_object_selection(app, d.start, [end[0], end[1]], d.modifiers),
+        Tool::ObjectSelection => {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let click = (end[0] - d.start[0]).abs() < 2.0 && (end[1] - d.start[1]).abs() < 2.0;
+                if click {
+                    if app.sam3.click([end[0], end[1]], d.modifiers.alt) {
+                        app.ui.status_error = false;
+                    } else if let Some(error) = app.sam3.hint() {
+                        app.ui.status = error.into();
+                        app.ui.status_error = true;
+                    }
+                    return;
+                }
+                if app.sam3.box_drag([d.start[0], d.start[1]], [end[0], end[1]]) {
+                    app.ui.status = "Box prompt set. Press Enter to select".into();
+                    app.ui.status_error = false;
+                    return;
+                }
+            }
+            crate::retouch_ui::finish_object_selection(app, d.start, [end[0], end[1]], d.modifiers);
+        }
         // Photoshop: a click without dragging opens Create Rectangle / Ellipse / … instead.
         t if crate::vector_ui::is_shape_tool(t)
             && crate::shape_dialog::is_click(d.start, &d.points, app.current_zoom())
