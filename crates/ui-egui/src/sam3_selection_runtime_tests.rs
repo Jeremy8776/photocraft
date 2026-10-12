@@ -88,19 +88,78 @@ fn select_subject_sends_the_panel_text_and_empty_text_means_find_a_subject() {
 }
 
 #[test]
+fn the_popout_selects_the_subject_from_its_button() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut app = crate::PhotocraftApp::new(Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width":100,"height":100})).unwrap();
+    app.ui.tool = Tool::ObjectSelection;
+    // A wired runtime: the section's button must queue a Ground job on the worker channel.
+    let (task_tx, task_rx) = mpsc::channel();
+    let (_result_tx, result_rx) = mpsc::channel();
+    app.sam3 = Runtime { tasks: Some(task_tx), results: Some(result_rx), ..Default::default() };
+    // One tick gives the runtime its document key (it also queues a Prepare; drained below).
+    let ctx = egui::Context::default();
+    let mut sam3 = std::mem::take(&mut app.sam3);
+    sam3.tick(&mut app, &ctx);
+    sam3.ready = true;
+    sam3.model_size = Some([100, 100]);
+    app.sam3 = sam3;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(320.0, 640.0)).build_ui_state(
+        |ui, app: &mut crate::PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            crate::sam3_panel::show(app, ui.ctx());
+        },
+        app,
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    assert!(h.query_all_by_label("Select Subject").next().is_some(), "the pop-out opens with Object Selection");
+    for unrelated in ["Transform", "Align and Distribute", "Quick Actions", "Remove Background"] {
+        assert!(h.query_all_by_label(unrelated).next().is_none(), "no {unrelated} in the selection pop-out");
+    }
+    // Empty text means "find a subject": the Ground job still goes out with empty text.
+    // (Query by role: the section header carries the same label, so take the LAST match,
+    // which is the button; the header is drawn first and must not be clicked.)
+    let button = h
+        .query_all_by_role(egui::accesskit::Role::Button)
+        .filter(|n| n.accesskit_node().label().as_deref() == Some("Select Subject"))
+        .collect::<Vec<_>>()
+        .pop()
+        .expect("the Select Subject button");
+    button.click();
+    h.run_steps(2);
+    assert!(h.state().sam3.click_busy, "the button started a grounding job");
+    let mut ground = None;
+    while let Ok(job) = task_rx.try_recv() {
+        if matches!(job, Job::Ground { .. }) {
+            ground = Some(job);
+        }
+    }
+    assert!(matches!(ground, Some(Job::Ground { text, .. }) if text.is_empty()), "clicking the button sends one Ground job");
+    // Another tool: the section draws nothing.
+    h.state_mut().ui.tool = Tool::Move;
+    h.run_steps(2);
+    assert!(h.query_all_by_label("Select Subject").next().is_none(), "no pop-out when another tool is active");
+    h.state_mut().ui.tool = Tool::ObjectSelection;
+    h.state_mut().ui.sam3_panel = false;
+    h.run_steps(2);
+    assert!(h.query_all_by_label("Select Subject").next().is_none(), "a closed pop-out stays hidden");
+}
+
+#[test]
 fn closing_the_panel_sticks_until_the_tool_is_reselected() {
     let mut app = crate::PhotocraftApp::new(Session::new(), crate::Services::default());
-    app.session.execute("file.new", json!({"width":10,"height":10})).unwrap();
-    let mut runtime = Runtime::default();
+    let mut runtime = ready_runtime(&mut app);
     let ctx = egui::Context::default();
-    app.ui.tool = Tool::ObjectSelection;
-    runtime.tick(&mut app, &ctx);
     assert!(app.ui.sam3_panel, "opens with the tool");
     Runtime::panel_closed(&mut app);
     runtime.tick(&mut app, &ctx);
     assert!(!app.ui.sam3_panel, "stays closed");
     app.ui.tool = Tool::Move;
     runtime.tick(&mut app, &ctx);
+    assert!(!app.ui.sam3_panel, "another tool hides the pop-out");
     app.ui.tool = Tool::ObjectSelection;
     runtime.tick(&mut app, &ctx);
     assert!(app.ui.sam3_panel, "reselecting the tool brings it back");

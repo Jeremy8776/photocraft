@@ -3059,6 +3059,10 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> Option<(&'static
     cmd
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "object_selection_properties_tests.rs"]
+mod object_selection_properties_tests;
+
 // ----------------------------------------------------------------------------- properties
 
 /// Floating Properties card anchored to the canvas' top-right corner.

@@ -1,9 +1,10 @@
-//! Floating Object Selection panel: everything the local SAM 3 model offers on one card.
-//! Points so far, the box, the selection mode, Select Subject (text grounding) and Apply.
+//! Object Selection owns this independent pop-out, never a document, layer or mask
+//! Properties section. Selection actions share the same SAM 3 runtime.
 use crate::PhotocraftApp;
 use crate::sam3_prompts::Mode;
 use crate::state::Tool;
-use egui::{Align, Button, Layout, RichText};
+use crate::theme::Tokens;
+use egui::{Align2, RichText, Sense, pos2, vec2};
 
 #[derive(Default)]
 struct Actions {
@@ -11,80 +12,104 @@ struct Actions {
     ground: bool,
     clear: bool,
     undo: bool,
-    close: bool,
 }
 
 pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    if app.ui.tool != Tool::ObjectSelection || !app.ui.sam3_panel {
+    if app.ui.tool != Tool::ObjectSelection || !app.ui.sam3_panel || app.session.active().is_none() {
         return;
     }
-    let t = crate::theme::Tokens::get(ctx);
+    let t = Tokens::get(ctx);
     let canvas = app.last_canvas_rect;
-    let width = 250.0;
-    let movable = !app.session.prefs().workspace_locked;
+    let width = 320.0;
+    let mut open = true;
     let (positive, negative, has_box) = {
         let b = &app.sam3.builder;
         (b.positive.len(), b.negative.len(), b.box_.is_some())
     };
-    let error = app.sam3.error();
+    let task_status = app.sam3.task_status().map(|(message, warning, busy)| (message.to_owned(), warning, busy));
+    let can_submit = app.sam3.can_submit();
     let mut mode = app.sam3.builder.mode;
     let mut text = app.sam3.builder.text.clone();
     let mut act = Actions::default();
-    egui::Window::new(tl!("Select Subject"))
+    egui::Window::new(tl!(Tool::ObjectSelection.label()))
         .id(egui::Id::new("sam3-panel"))
         .title_bar(false)
+        .collapsible(false)
         .resizable(false)
-        .movable(movable)
+        .movable(!app.session.prefs().workspace_locked)
         .min_width(width)
         .max_width(width)
-        .default_pos(egui::pos2((canvas.right() - width - 16.0).max(canvas.left() + 8.0), canvas.top() + 8.0))
+        .default_pos(pos2((canvas.right() - width - 16.0).max(canvas.left() + 8.0), canvas.top() + 8.0))
         .show(ctx, |ui| {
             ui.set_width(width);
+            ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+            ui.spacing_mut().interact_size.y = 28.0;
+            ui.style_mut().override_font_id = Some(egui::FontId::proportional(13.0));
+            // Inputs lead; the close affordance shares the Mode row rather than a title strip.
             ui.horizontal(|ui| {
-                ui.label(RichText::new(tl!("Select Subject")).strong().size(12.0));
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.add(Button::new("×").frame(false)).clicked() {
-                        act.close = true;
-                    }
-                });
-            });
-            ui.separator();
-            if positive + negative == 0 && !has_box {
-                ui.label(RichText::new(tl!("Click objects to add points. Alt-click excludes.")).size(11.0).color(t.text_faint));
-            } else {
-                let boxed = if has_box { "  ☐" } else { "" };
-                ui.label(RichText::new(format!("{positive} +   {negative} −{boxed}")).size(11.0).color(t.text));
-            }
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(tl!("Mode")).size(11.0).color(t.text_dim));
-                egui::ComboBox::from_id_salt("sam3-mode").selected_text(mode_label(mode)).width(ui.available_width() - 8.0).show_ui(ui, |ui| {
+                field_label(ui, tl!("Mode"), &t);
+                let mode_width = (ui.available_width() - 22.0 - ui.spacing().item_spacing.x).max(80.0);
+                egui::ComboBox::from_id_salt("sam3-mode").selected_text(mode_label(mode)).width(mode_width).show_ui(ui, |ui| {
                     for m in [Mode::Replace, Mode::Add, Mode::Subtract, Mode::Intersect] {
                         ui.selectable_value(&mut mode, m, mode_label(m));
                     }
                 });
-            });
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(tl!("Text")).size(11.0).color(t.text_dim));
-                let field = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 8.0).hint_text(tl!("person, red car…")));
-                // Enter in the field runs Select Subject, as the button does.
-                if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    act.ground = true;
+                if crate::icons::button(ui, "x", 22.0, false, tl!("Close")).clicked() {
+                    open = false;
                 }
             });
-            ui.horizontal(|ui| {
-                act.ground |= ui.add(Button::new(tl!("Select Subject")).small()).clicked();
-                act.commit |= ui.add(Button::new(tl!("Apply")).small()).clicked();
-                act.clear |= ui.add(Button::new(tl!("Clear")).small()).clicked();
-                act.undo |= ui.add(Button::new(tl!("Undo")).small()).clicked();
+            let field = ui.horizontal(|ui| {
+                field_label(ui, tl!("Text"), &t);
+                let prompt_width = (ui.available_width() - 56.0 - ui.spacing().item_spacing.x).max(80.0);
+                let response = ui.add_sized(
+                    vec2(prompt_width, 28.0),
+                    egui::TextEdit::singleline(&mut text).font(egui::FontId::proportional(14.0)).margin(vec2(6.0, 5.0)).hint_text(tl!("person, red car…")),
+                );
+                let apply = egui::Button::new(RichText::new(tl!("Apply")).font(crate::theme::medium(12.0)))
+                    .fill(t.field)
+                    .stroke(egui::Stroke::new(1.0, t.accent))
+                    .corner_radius(t.radius_sm);
+                let has_prompt = !text.trim().is_empty() || positive + negative > 0 || has_box;
+                act.commit |= ui.add_enabled_ui(can_submit && has_prompt, |ui| ui.add_sized(vec2(56.0, 28.0), apply)).inner.clicked();
+                response
             });
-            if let Some(error) = &error {
-                ui.label(RichText::new(error).size(11.0).color(t.warning));
+            // Keyboard and inline Apply submit the same prompt path.
+            if field.inner.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                act.commit = true;
+            }
+            ui.scope(|ui| {
+                ui.spacing_mut().interact_size.y = 20.0;
+                ui.horizontal(|ui| {
+                    ui.add_space(44.0);
+                    act.ground |= ui.add_enabled_ui(can_submit, |ui| quiet_button(ui, tl!("Select Subject"), &t)).inner.clicked();
+                    act.clear |= quiet_button(ui, tl!("Clear"), &t).clicked();
+                    act.undo |= quiet_button(ui, tl!("Undo"), &t).clicked();
+                });
+            });
+            if task_status.is_none() && (positive + negative > 0 || has_box) {
+                let boxed = if has_box { "  ☐" } else { "" };
+                ui.label(RichText::new(format!("{positive} +   {negative} −{boxed}")).size(11.0).color(t.text_dim));
+            } else if task_status.is_none() {
+                ui.label(RichText::new(tl!("Click objects to add points. Alt-click excludes.")).size(11.0).color(t.text_dim));
+            }
+            if let Some((message, warning, busy)) = &task_status {
+                ui.horizontal_wrapped(|ui| {
+                    if *busy {
+                        ui.add(egui::Spinner::new().size(14.0));
+                    }
+                    ui.label(RichText::new(message).size(12.0).color(if *warning { t.warning } else { t.text }));
+                });
             }
         });
+    if !open {
+        crate::sam3_selection::Runtime::panel_closed(app);
+    }
     app.sam3.builder.mode = mode;
     app.sam3.builder.text = text.clone();
-    if act.close {
-        crate::sam3_selection::Runtime::panel_closed(app);
+    // Apply submits typed text; without text it commits the canvas points or box.
+    if act.commit && !text.trim().is_empty() {
+        act.commit = false;
+        act.ground = true;
     }
     if act.clear {
         app.sam3.clear_prompt();
@@ -104,6 +129,17 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status = "Selecting subject with SAM 3…".into();
         app.ui.status_error = false;
     }
+}
+
+/// Right-aligned field label in a fixed-width column, like the other Properties rows.
+fn field_label(ui: &mut egui::Ui, s: &str, t: &Tokens) {
+    let (r, response) = ui.allocate_exact_size(vec2(44.0, 28.0), Sense::hover());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, s));
+    ui.painter().text(pos2(r.right() - 4.0, r.center().y), Align2::RIGHT_CENTER, s, crate::theme::medium(13.0), t.text);
+}
+
+fn quiet_button(ui: &mut egui::Ui, label: &str, t: &Tokens) -> egui::Response {
+    ui.add(egui::Button::new(RichText::new(label).font(egui::FontId::proportional(11.5)).color(t.text_dim)).frame(false))
 }
 
 /// `select.subject` while the Object Selection tool is active (the options-bar button, the menu

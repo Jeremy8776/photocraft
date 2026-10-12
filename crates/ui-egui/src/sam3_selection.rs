@@ -39,6 +39,8 @@ pub(crate) struct Runtime {
     model_size: Option<[u32; 2]>,
     document_size: Option<[u32; 2]>,
     error: Option<String>,
+    /// Tool-owned feedback survives unrelated global status-bar messages.
+    task_notice: Option<(String, bool)>,
     overlay: Option<egui::TextureHandle>,
     /// The prompt the in-flight or latest hover preview was asked for; `None` means stale.
     sent: Option<craft_ai_comfyui::sam3::Prompt>,
@@ -56,6 +58,7 @@ impl Runtime {
             self.clear_preview();
             self.pending_click = None;
             self.builder.clear();
+            self.task_notice = None;
             app.ui.sam3_panel = false;
             app.ui.sam3_panel_closed = false;
             if app.ui.status == "Preparing SAM 3…" || app.ui.status.starts_with("Click") {
@@ -87,6 +90,7 @@ impl Runtime {
         self.ready = false;
         self.model_size = None;
         self.error = None;
+        self.task_notice = None;
         self.clear_preview();
         self.pending_click = None;
         self.builder.clear();
@@ -117,6 +121,7 @@ impl Runtime {
                     Ok(size) => {
                         self.ready = true;
                         self.model_size = Some(size);
+                        self.task_notice = None;
                         if let Some((at, negative)) = self.pending_click.take() {
                             self.click(at, negative);
                         } else {
@@ -166,10 +171,12 @@ impl Runtime {
                             if app.ui.status == "Object selected" {
                                 app.ui.status = format!("Selected \u{201c}{word}\u{201d}");
                             }
+                            self.task_notice = Some((app.ui.status.clone(), app.ui.status_error));
                         }
                         Err(error) => {
                             app.ui.status = format!("Select Subject: {error}");
                             app.ui.status_error = true;
+                            self.task_notice = Some((app.ui.status.clone(), true));
                         }
                     }
                 }
@@ -193,6 +200,7 @@ impl Runtime {
         match app.run("select.sam3Mask", json!({"docId":key.doc_id,"revision":key.revision,"maskPng":encoded,"mode":mode})) {
             Ok(result) if result["changed"] == false => {
                 app.ui.status = "Object Selection found nothing there".into();
+                app.ui.status_error = true;
             }
             Ok(_) => {
                 app.ui.status = "Object selected".into();
@@ -208,8 +216,13 @@ impl Runtime {
                     }
                 }
             }
-            Err(error) => self.error = Some(error),
+            Err(error) => {
+                app.ui.status = format!("Object Selection: {error}");
+                app.ui.status_error = true;
+                self.error = Some(error);
+            }
         }
+        self.task_notice = Some((app.ui.status.clone(), app.ui.status_error));
     }
 
     pub(crate) fn hint(&self) -> Option<&str> {
@@ -222,6 +235,22 @@ impl Runtime {
         } else {
             None
         }
+    }
+
+    /// Feedback owned by this tool: message, warning state and whether work is running.
+    pub(crate) fn task_status(&self) -> Option<(&str, bool, bool)> {
+        if let Some(error) = &self.error {
+            return Some((error, true, false));
+        }
+        if self.key.is_some() && !self.ready {
+            return Some(("Preparing SAM 3…", false, true));
+        }
+        self.task_notice.as_ref().map(|(message, warning)| (message.as_str(), *warning, self.click_busy))
+    }
+
+    /// Whether a selection job can be queued, shared by the pop-out actions.
+    pub(crate) fn can_submit(&self) -> bool {
+        self.key.is_some() && self.ready && self.error.is_none() && !self.click_busy
     }
 
     /// The latest failure, if any, for the panel to show.
@@ -246,6 +275,9 @@ impl Runtime {
     /// Drop the whole accumulated prompt and its preview.
     pub(crate) fn clear_prompt(&mut self) {
         self.builder.clear();
+        if !self.click_busy {
+            self.task_notice = None;
+        }
         self.overlay = None;
         self.sent = None;
     }
@@ -338,6 +370,7 @@ impl Runtime {
         if let Some(tasks) = &self.tasks
             && tasks.send(Job::Commit { key, prompt, mode: self.builder.mode.as_str() }).is_ok()
         {
+            self.task_notice = Some(("Selecting object with SAM 3…".into(), false));
             self.click_busy = true;
             true
         } else {
@@ -359,6 +392,7 @@ impl Runtime {
         if let Some(tasks) = &self.tasks
             && tasks.send(Job::Ground { key, text: owned, mode: self.builder.mode.as_str() }).is_ok()
         {
+            self.task_notice = Some(("Selecting subject with SAM 3…".into(), false));
             self.click_busy = true;
             true
         } else {
@@ -502,6 +536,10 @@ fn model_point(doc: [u32; 2], model: [u32; 2], point: [f64; 2]) -> Option<(f32, 
 #[cfg(test)]
 #[path = "sam3_selection_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "sam3_panel_ui_tests.rs"]
+mod panel_tests;
 
 #[cfg(test)]
 #[path = "sam3_selection_runtime_tests.rs"]
