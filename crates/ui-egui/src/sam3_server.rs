@@ -8,6 +8,21 @@ use std::time::{Duration, Instant};
 const URL: &str = "http://127.0.0.1:8000";
 const PORT: u16 = 8000;
 
+/// Windows process flags for the headless server: no window of its own, in its own process group.
+///
+/// It must NOT be `DETACHED_PROCESS`. That flag gives the server no console at all, and Windows then
+/// ignores `CREATE_NO_WINDOW` and opens a visible console for every console program the server
+/// starts in turn (ComfyUI-SAM3 runs its model in one). Without it the server gets a hidden console
+/// that its children share, so nothing appears.
+#[cfg(target_os = "windows")]
+const HEADLESS_FLAGS: u32 = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(target_os = "windows")]
+const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+#[cfg(all(test, target_os = "windows"))]
+const DETACHED_PROCESS: u32 = 0x0000_0008;
+
 pub(super) fn ensure_running() -> Result<(), String> {
     let session = craft_ai_comfyui::Sam3Session::new(URL).map_err(|e| e.message)?;
     let address = SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, PORT);
@@ -28,7 +43,7 @@ pub(super) fn ensure_running() -> Result<(), String> {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
-            .creation_flags(0x0800_0000 | 0x0000_0008 | 0x0000_0200)
+            .creation_flags(HEADLESS_FLAGS)
             .spawn()
             .map_err(|e| format!("Could not start your existing headless ComfyUI: {e}"))?;
         let deadline = Instant::now() + Duration::from_secs(60);
@@ -116,5 +131,16 @@ mod tests {
         assert!(args.windows(2).any(|pair| pair[0] == "--extra-model-paths-config" && pair[1] == extra.as_os_str()));
         assert!(args.contains(&"--disable-auto-launch".into()));
         assert_eq!(args.iter().filter(|arg| arg.as_os_str() == "--database-url").count(), 1);
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_flags {
+    use super::*;
+
+    #[test]
+    fn the_server_is_hidden_without_being_detached_so_its_children_stay_hidden_too() {
+        assert_ne!(HEADLESS_FLAGS & CREATE_NO_WINDOW, 0);
+        assert_eq!(HEADLESS_FLAGS & DETACHED_PROCESS, 0, "detaching makes Windows open a console for each child");
     }
 }
