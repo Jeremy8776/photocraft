@@ -163,6 +163,8 @@ mod sam3_panel;
 #[cfg(not(target_arch = "wasm32"))]
 mod sam3_prompts;
 #[cfg(not(target_arch = "wasm32"))]
+mod sam3_route;
+#[cfg(not(target_arch = "wasm32"))]
 mod sam3_selection;
 #[cfg(not(target_arch = "wasm32"))]
 mod sam3_server;

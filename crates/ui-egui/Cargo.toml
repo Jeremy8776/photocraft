@@ -41,6 +41,10 @@ flate2 = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
 craft-ai-comfyui = { path = "../../../craft-ai-model/crates/ai-comfyui" }
+# The suite's one tool-to-model binding: which local address Select subject runs on.
+craft-ai-client = { path = "../../../craft-ai-model/crates/ai-client" }
+craft-ai-features = { path = "../../../craft-ai-model/crates/ai-features" }
+craft-ai-model = { path = "../../../craft-ai-model/crates/ai-model" }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
 
@@ -50,6 +54,8 @@ sys-locale = "=0.3.2"
 winsafe = { version = "=0.0.29", default-features = false, features = ["kernel"] }
 
 [dev-dependencies]
+craft-ai-native = { path = "../../../craft-ai-model/crates/ai-native" }
+tempfile = "3"
 # Synthetic raw files for the open-time Camera Raw dialog tests.
 photocraft-raw = { workspace = true, features = ["testgen"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }

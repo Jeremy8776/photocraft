@@ -1262,15 +1262,71 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ai-artcraft"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-model",
+ "serde_json",
+ "ureq",
+ "uuid",
+]
+
+[[package]]
+name = "craft-ai-bfl"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-model",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "craft-ai-client"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-artcraft",
+ "craft-ai-bfl",
+ "craft-ai-comfyui",
+ "craft-ai-features",
+ "craft-ai-media",
+ "craft-ai-model",
+ "craft-ai-native",
+ "craft-ai-openai",
+ "craft-ai-sam3",
+ "craft-ai-seedance",
+ "craft-ai-vertex",
+]
+
+[[package]]
 name = "craft-ai-comfyui"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "craft-ai-media",
  "craft-ai-model",
  "craft-ai-native",
  "png 0.17.16",
  "serde",
  "serde_json",
+ "tempfile",
+ "ureq",
+ "url",
+]
+
+[[package]]
+name = "craft-ai-features"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-model",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "craft-ai-media"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-model",
  "tempfile",
  "ureq",
  "url",
@@ -1296,6 +1352,43 @@ dependencies = [
  "keyring",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "craft-ai-openai"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-model",
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "craft-ai-sam3"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-model",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "craft-ai-seedance"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-model",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "craft-ai-vertex"
+version = "0.1.0"
+dependencies = [
+ "craft-ai-model",
+ "serde_json",
+ "ureq",
 ]
 
 [[package]]
@@ -4941,7 +5034,11 @@ name = "photocraft-ui-egui"
 version = "0.8.0"
 dependencies = [
  "base64 0.22.1",
+ "craft-ai-client",
  "craft-ai-comfyui",
+ "craft-ai-features",
+ "craft-ai-model",
+ "craft-ai-native",
  "craft-ui",
  "eframe",
  "egui",
@@ -4972,6 +5069,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sys-locale",
+ "tempfile",
  "toml",
  "winsafe",
 ]

@@ -5,8 +5,15 @@ use std::net::{SocketAddrV4, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-const URL: &str = "http://127.0.0.1:8000";
-const PORT: u16 = 8000;
+/// The port of a plain `http://127.0.0.1:<port>` address, which is the only kind this app may start a
+/// ComfyUI on. Any other address (another host name, https, a path) is somebody else's server.
+fn loopback_port(url: &str) -> Option<u16> {
+    let port = url.strip_prefix("http://127.0.0.1:")?.trim_end_matches('/');
+    match port.parse::<u16>() {
+        Ok(0) | Err(_) => None,
+        Ok(port) => Some(port),
+    }
+}
 
 /// Windows process flags for the headless server: no window of its own, in its own process group.
 ///
@@ -23,9 +30,14 @@ const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 #[cfg(all(test, target_os = "windows"))]
 const DETACHED_PROCESS: u32 = 0x0000_0008;
 
-pub(super) fn ensure_running() -> Result<(), String> {
-    let session = craft_ai_comfyui::Sam3Session::new(URL).map_err(|e| e.message)?;
-    let address = SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, PORT);
+/// Makes sure the ComfyUI at `url` (the address the shared Select subject binding chose) answers,
+/// starting the installed Desktop one headlessly only when `url` is a plain IPv4 loopback address.
+pub(super) fn ensure_running(url: &str) -> Result<(), String> {
+    let session = craft_ai_comfyui::Sam3Session::new(url).map_err(|e| e.message)?;
+    let Some(port) = loopback_port(url) else {
+        return session.verify_server().map_err(|e| format!("The ComfyUI chosen for Select subject is not answering: {}", e.message));
+    };
+    let address = SocketAddrV4::new(std::net::Ipv4Addr::LOCALHOST, port);
     if TcpStream::connect_timeout(&address.into(), Duration::from_secs(2)).is_ok() {
         return session.verify_server().map_err(|e| format!("ComfyUI port is in use: {}", e.message));
     }
@@ -35,7 +47,7 @@ pub(super) fn ensure_running() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let (python, program, base, extra) = desktop_paths()?;
-        let args = headless_args(&base, &program, &extra);
+        let args = headless_args(&base, &program, &extra, port);
         use std::os::windows::process::CommandExt;
         let mut child = std::process::Command::new(&python)
             .args(args)
@@ -88,7 +100,7 @@ fn desktop_paths() -> Result<(PathBuf, PathBuf, PathBuf, PathBuf), String> {
     Ok((python, program, base, extra))
 }
 
-fn headless_args(base: &Path, program: &Path, extra: &Path) -> Vec<OsString> {
+fn headless_args(base: &Path, program: &Path, extra: &Path, port: u16) -> Vec<OsString> {
     let database = format!("sqlite:///{}", base.join("user/comfyui.db").to_string_lossy().replace('\\', "/"));
     vec![
         program.join("main.py").into_os_string(),
@@ -110,7 +122,7 @@ fn headless_args(base: &Path, program: &Path, extra: &Path) -> Vec<OsString> {
         "--listen".into(),
         "127.0.0.1".into(),
         "--port".into(),
-        PORT.to_string().into(),
+        port.to_string().into(),
         "--enable-manager".into(),
     ]
 }
@@ -124,13 +136,39 @@ mod tests {
         let base = Path::new("C:/my ComfyUI");
         let program = Path::new("C:/Programs/ComfyUI/resources/ComfyUI");
         let extra = Path::new("C:/AppData/ComfyUI/extra_models_config.yaml");
-        let args = headless_args(base, program, extra);
+        let args = headless_args(base, program, extra, 8000);
         assert_eq!(args.first().unwrap(), &program.join("main.py").into_os_string());
         assert!(args.windows(2).any(|pair| pair == ["--listen", "127.0.0.1"]));
         assert!(args.windows(2).any(|pair| pair == ["--port", "8000"]));
         assert!(args.windows(2).any(|pair| pair[0] == "--extra-model-paths-config" && pair[1] == extra.as_os_str()));
         assert!(args.contains(&"--disable-auto-launch".into()));
         assert_eq!(args.iter().filter(|arg| arg.as_os_str() == "--database-url").count(), 1);
+    }
+
+    #[test]
+    fn the_headless_server_listens_on_the_port_that_was_chosen() {
+        let args = headless_args(Path::new("C:/b"), Path::new("C:/p"), Path::new("C:/e.yaml"), 9100);
+        assert!(args.windows(2).any(|pair| pair == ["--port", "9100"]));
+        assert!(!args.windows(2).any(|pair| pair == ["--port", "8000"]));
+    }
+
+    #[test]
+    fn only_a_plain_ipv4_loopback_address_may_be_started_here() {
+        assert_eq!(loopback_port("http://127.0.0.1:9100"), Some(9100));
+        assert_eq!(loopback_port("http://127.0.0.1:9100/"), Some(9100));
+        assert_eq!(loopback_port("http://127.0.0.1:8000"), Some(8000));
+        for other in [
+            "http://localhost:9100",
+            "http://[::1]:9100",
+            "https://127.0.0.1:9100",
+            "http://192.168.0.5:9100",
+            "http://127.0.0.1:9100/x",
+            "http://127.0.0.1",
+            "http://127.0.0.1:0",
+            "http://user@127.0.0.1:9100",
+        ] {
+            assert_eq!(loopback_port(other), None, "{other}");
+        }
     }
 }
 

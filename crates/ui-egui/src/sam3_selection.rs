@@ -426,6 +426,8 @@ mod text_selection;
 
 fn worker(jobs: mpsc::Receiver<Job>, results: mpsc::Sender<Reply>, wake: egui::Context) {
     let mut session: Option<craft_ai_comfyui::Sam3Session> = None;
+    // The address `session` talks to; a rebinding in the launcher gives the next prepare a new one.
+    let mut session_url = String::new();
     let mut prepared = None;
     for job in jobs {
         let reply = match job {
@@ -442,9 +444,11 @@ fn worker(jobs: mpsc::Receiver<Job>, results: mpsc::Sender<Reply>, wake: egui::C
                     if png.len() > 16 * 1024 * 1024 {
                         return Err("The Object Selection image exceeds the local model's 16 MiB input limit".to_string());
                     }
-                    crate::sam3_server::ensure_running()?;
-                    if session.is_none() {
-                        session = Some(craft_ai_comfyui::Sam3Session::new("http://127.0.0.1:8000").map_err(|e| e.message)?);
+                    let url = crate::sam3_route::resolve()?;
+                    crate::sam3_server::ensure_running(&url)?;
+                    if session.is_none() || session_url != url {
+                        session = Some(craft_ai_comfyui::Sam3Session::new(&url).map_err(|e| e.message)?);
+                        session_url = url;
                     }
                     let client = session.as_mut().ok_or_else(|| "SAM 3 is unavailable".to_string())?;
                     client.prepare(&png).map_err(|e| e.message)?;
