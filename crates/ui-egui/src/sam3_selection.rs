@@ -421,6 +421,9 @@ fn preview_image(jpeg: &[u8]) -> Result<egui::ColorImage, String> {
     }
 }
 
+#[path = "sam3_multi_select.rs"]
+mod text_selection;
+
 fn worker(jobs: mpsc::Receiver<Job>, results: mpsc::Sender<Reply>, wake: egui::Context) {
     let mut session: Option<craft_ai_comfyui::Sam3Session> = None;
     let mut prepared = None;
@@ -469,7 +472,11 @@ fn worker(jobs: mpsc::Receiver<Job>, results: mpsc::Sender<Reply>, wake: egui::C
             Job::Ground { key, text, mode } => {
                 let mask = if prepared == Some(key) {
                     session.as_ref().ok_or_else(|| "SAM 3 image not prepared".to_string()).and_then(|s| {
-                        if text.is_empty() { s.ground_first(DEFAULT_SUBJECTS) } else { s.ground(&text).map(|mask| (text.clone(), mask)) }.map_err(|e| e.message)
+                        if text.is_empty() {
+                            s.ground_first(DEFAULT_SUBJECTS).map_err(|e| e.message)
+                        } else {
+                            text_selection::ground_phrases(&text, |phrase| s.ground(phrase).map_err(|e| e.message))
+                        }
                     })
                 } else {
                     Err("The Object Selection document changed".into())
