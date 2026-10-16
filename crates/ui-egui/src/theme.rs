@@ -975,7 +975,7 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
     // Keep native windows at SystemDefault so macOS continues reporting OS appearance changes,
     // including when an integration or restored egui state pinned its own theme preference.
     ctx.set_theme(egui::ThemePreference::System);
-    let t = Tokens::for_kind(kind);
+    let t = crate::ext_theme::tokens_for(ctx, kind);
     ctx.data_mut(|d| d.insert_temp(egui::Id::new("photocraft-theme"), t));
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.chrome;

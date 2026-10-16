@@ -83,6 +83,7 @@ pub mod egui_fonts;
 pub mod enable_rules;
 pub mod eraser_ui;
 pub mod export_dialog;
+pub mod ext_theme;
 pub mod eyedropper_ui;
 pub mod field_tab;
 pub mod file_dialog;
@@ -810,6 +811,9 @@ pub struct PhotocraftApp {
     pub jobs: jobs_ui::JobsUi,
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     live_tokens: theme::live::LiveTokens,
+    /// Follows the shared extensions store for the theme chosen for PhotoCraft; off until the desktop app asks.
+    #[cfg(not(target_arch = "wasm32"))]
+    ext_theme: ext_theme::Watcher,
 }
 
 impl PhotocraftApp {
@@ -946,6 +950,8 @@ impl PhotocraftApp {
             jobs: Default::default(),
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
+            #[cfg(not(target_arch = "wasm32"))]
+            ext_theme: ext_theme::Watcher::default(),
         };
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
@@ -1830,6 +1836,10 @@ impl eframe::App for PhotocraftApp {
         if self.live_tokens.poll(ctx, self.ui.theme) {
             self.checker = None;
         }
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.ext_theme.poll(ctx) {
+            self.apply_theme(ctx, self.ui.theme);
+        }
         self.drain_control(ctx);
         native_menu::run(self, ctx);
         // Switching tools commits, also between the Type and Type Mask tools.
@@ -2194,6 +2204,13 @@ impl PhotocraftApp {
         } else {
             self.apply_theme(ctx, kind);
         }
+    }
+
+    /// Wears the theme chosen for PhotoCraft in the shared extensions store (in ArtCraft Launcher), and
+    /// follows it as it changes. Only the desktop app calls this, so tests never read a real store.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn follow_extensions(&mut self) {
+        self.ext_theme.follow_default_store();
     }
 
     pub(crate) fn apply_theme(&mut self, ctx: &egui::Context, kind: theme::ThemeKind) {

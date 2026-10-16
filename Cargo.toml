@@ -11,6 +11,10 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "5c874d51eeb3de70e735c8ce87a59a7dedd47675", features = ["serde"] }
+# The shared themes and extensions contract. Local paths while it is built beside the apps; replace with a
+# pinned git revision of https://github.com/Jeremy8776/craft-extensions before any pull request.
+craft-ext-core = { path = "../craft-extensions/crates/ext-core" }
+craft-ext-store = { path = "../craft-extensions/crates/ext-store" }
 # internal
 photocraft-geom = { path = "crates/geom" }
 photocraft-color = { path = "crates/color" }

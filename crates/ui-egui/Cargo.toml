@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 craft-print = { workspace = true }
 craft-ui = { workspace = true }
+craft-ext-core = { workspace = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-cms = { workspace = true }
@@ -40,6 +41,8 @@ base64 = "0.22"
 flate2 = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The shared extensions store, read-only here: which theme the launcher (or any app) chose for PhotoCraft.
+craft-ext-store = { workspace = true }
 rayon = { workspace = true }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
