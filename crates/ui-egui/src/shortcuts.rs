@@ -657,6 +657,11 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         || app.distort.gallery.is_some()
         || ctx.any_popup_open()
         || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::new("tool-flyout")).is_some());
+    // Object Selection must not consume keys that belong to a menu, dialog or text field.
+    #[cfg(not(target_arch = "wasm32"))]
+    if !esc_taken && crate::sam3_panel::keys(app, ctx) {
+        return;
+    }
     // Both full screen modes (with and without the menu bar) return to Standard, as in Photoshop
     // (#4116), through the menu command so the window and the Screen Mode check follow.
     if !esc_taken && app.ui.view.screen_mode != "standard" && pressed(Key::Escape) {

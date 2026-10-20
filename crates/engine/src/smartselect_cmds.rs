@@ -1041,4 +1041,45 @@ mod tests {
         s.execute("select.focusArea", json!({})).unwrap();
         assert!(cov(&s, 30, 50) >= 0.5 && cov(&s, 130, 50) < 0.5);
     }
+
+    #[test]
+    fn sam3_imported_mask_scales_to_document_and_is_undoable() {
+        use base64::Engine;
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 2, "depth": 16})).unwrap();
+        let source = photocraft_codecs::Image::from_u8(2, 1, photocraft_codecs::ChannelLayout::Gray, vec![0, 255]).unwrap();
+        let png = photocraft_codecs::encode(&source, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+        let st = s.active().unwrap();
+        let (id, revision) = (st.doc.id.0, st.revision);
+        let params = json!({"maskPng": encoded, "docId": id, "revision": revision, "mode": "replace"});
+        let result = s.execute("select.sam3Mask", params.clone()).unwrap();
+        assert_eq!(result["changed"], true);
+        assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().pixel(0, 0)[0], 0.0);
+        assert!(s.active().unwrap().doc.selection.as_ref().unwrap().pixel(3, 1)[0] > 0.99);
+        let saved_revision = s.active().unwrap().revision;
+        assert!(s.execute("select.sam3Mask", params).is_err(), "a stale result must never apply");
+        assert_eq!(s.active().unwrap().revision, saved_revision);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(s.active().unwrap().doc.selection.is_none());
+    }
+
+    #[test]
+    fn sam3_import_rejects_corrupt_and_empty_masks_without_losing_the_selection() {
+        use base64::Engine;
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 2})).unwrap();
+        s.execute("select.rect", json!({"x":0,"y":0,"width":1,"height":1})).unwrap();
+        let st = s.active().unwrap();
+        let (id, revision) = (st.doc.id.0, st.revision);
+        let before = s.active().unwrap().doc.selection.clone();
+        let bad = json!({"docId": id,"revision":revision,"maskPng":"not-base64"});
+        assert!(s.execute("select.sam3Mask", bad).is_err());
+        let image = photocraft_codecs::Image::from_u8(2, 1, photocraft_codecs::ChannelLayout::Gray, vec![0, 0]).unwrap();
+        let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+        let empty = json!({"docId":id,"revision":revision,"maskPng":base64::engine::general_purpose::STANDARD.encode(png)});
+        let result = s.execute("select.sam3Mask", empty).unwrap();
+        assert_eq!(result["changed"], false);
+        assert_eq!(s.active().unwrap().doc.selection, before);
+    }
 }

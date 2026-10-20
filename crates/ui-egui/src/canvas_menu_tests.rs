@@ -112,7 +112,7 @@ fn check_reopening(tool: Tool, modifiers: Modifiers, popup: Popup) {
             tap(&mut h, center, modifiers, true);
             h.key_press(egui::Key::Escape);
             h.run_steps(2);
-            assert!(!is_open(&h, popup));
+            assert!(!is_open(&h, popup), "{tool:?} scale={scale} selection={selection} popup={popup:?}: Escape closes the menu");
         }
     }
 }
@@ -122,6 +122,23 @@ fn secondary_taps_keep_selection_menus_open() {
     for tool in [Tool::RectMarquee, Tool::EllipseMarquee, Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso, Tool::MagicWand, Tool::ObjectSelection] {
         check_reopening(tool, Modifiers::NONE, Popup::Tool);
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn object_selection_escape_dismisses_the_menu_before_clearing_its_prompt() {
+    let mut h = harness(Tool::ObjectSelection, false, 1.0);
+    h.state_mut().sam3.builder.add_point([40.0, 50.0], false);
+    let at = fractional_point(&h, 1.0);
+    tap(&mut h, at, Modifiers::NONE, true);
+    assert!(is_open(&h, Popup::Tool));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!is_open(&h, Popup::Tool), "the menu owns the first Escape");
+    assert_eq!(h.state().sam3.builder.positive, vec![[40.0, 50.0]], "dismissing the menu keeps the prompt");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().sam3.builder.positive.is_empty(), "the next Escape clears the prompt");
 }
 
 #[test]

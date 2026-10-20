@@ -1352,6 +1352,12 @@ pub struct UiState {
     pub camera_raw_scope: CameraRawScopeState,
     #[serde(default)]
     pub camera_raw_preview: CameraRawPreviewState,
+    /// The floating Object Selection (SAM 3) panel's visibility.
+    #[serde(default)]
+    pub sam3_panel: bool,
+    /// The user closed the SAM 3 panel for this tool activation.
+    #[serde(skip)]
+    pub sam3_panel_closed: bool,
 }
 
 impl Default for UiState {
@@ -1443,6 +1449,8 @@ impl Default for UiState {
             chrome: Default::default(),
             camera_raw_scope: Default::default(),
             camera_raw_preview: Default::default(),
+            sam3_panel: false,
+            sam3_panel_closed: false,
         }
     }
 }

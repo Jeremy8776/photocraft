@@ -43,6 +43,14 @@ flate2 = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
+craft-ai-comfyui = { path = "../../../craft-ai-wt-setup-completion/crates/ai-comfyui" }
+craft-ai-comfy-env = { path = "../../../craft-ai-wt-setup-completion/crates/ai-comfy-env" }
+# The suite's one tool-to-model binding: which local address Select subject runs on.
+craft-ai-client = { path = "../../../craft-ai-wt-setup-completion/crates/ai-client" }
+craft-ai-features = { path = "../../../craft-ai-wt-setup-completion/crates/ai-features" }
+craft-ai-core = { path = "../../../craft-ai-wt-setup-completion/crates/ai-core" }
+# The shared connections file the floating-dock model picker reads and switches.
+craft-ai-native = { path = "../../../craft-ai-wt-setup-completion/crates/ai-native" }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
 
@@ -55,6 +63,9 @@ winsafe = { version = "=0.0.29", default-features = false, features = ["kernel",
 # egui's own default fonts in tests: the oracle for egui_fonts.rs, and contexts made with
 # `Context::default()` (no install_fonts) can lay out text.
 egui = { workspace = true, features = ["default_fonts"] }
+# Isolated stores and temporary files for shared-route tests.
+craft-ai-native = { path = "../../../craft-ai-wt-setup-completion/crates/ai-native" }
+tempfile = "3"
 # Synthetic raw files for the open-time Camera Raw dialog tests.
 photocraft-raw = { workspace = true, features = ["testgen"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot", "eframe"] }

@@ -178,6 +178,16 @@ pub mod retouch_ui;
 mod rgb_histogram;
 pub mod rotate_view;
 pub mod rulers;
+#[cfg(not(target_arch = "wasm32"))]
+mod sam3_panel;
+#[cfg(not(target_arch = "wasm32"))]
+mod sam3_prompts;
+#[cfg(not(target_arch = "wasm32"))]
+mod sam3_route;
+#[cfg(not(target_arch = "wasm32"))]
+mod sam3_selection;
+#[cfg(not(target_arch = "wasm32"))]
+mod sam3_server;
 pub mod screen_picker;
 pub mod scrollbars;
 mod scrub_wrap;
@@ -630,6 +640,8 @@ pub struct PhotocraftApp {
     pub(crate) cam_preview: Option<cam_preview::CamPreview>,
     /// The pixels a Magnetic Lasso border follows (`magnetic_lasso_ui`).
     pub(crate) magnetic: magnetic_lasso_ui::Runtime,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) sam3: sam3_selection::Runtime,
     /// The next tool `Down` is a right-button drag that erases (see `paint_mouse`).
     secondary_erase: bool,
     /// The Brush or Pencil erase key is held this frame (`hold_keys::erase_held`, #3439).
@@ -894,6 +906,8 @@ impl PhotocraftApp {
             patch_preview: None,
             cam_preview: None,
             magnetic: Default::default(),
+            #[cfg(not(target_arch = "wasm32"))]
+            sam3: Default::default(),
             secondary_erase: false,
             held_erase: false,
             defer_live_stroke: false,
@@ -1068,6 +1082,17 @@ impl PhotocraftApp {
 
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if id == "select.subject" && self.ui.tool == Tool::ObjectSelection {
+            if let Some(error) = self.sam3.error() {
+                self.ui.status = format!("Select Subject: {error}");
+                self.ui.status_error = true;
+                return Err(error);
+            }
+            if sam3_panel::select_subject(self) {
+                return Ok(serde_json::json!({"queued": self.sam3.queue_name()}));
+            }
+        }
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -1980,6 +2005,12 @@ impl eframe::App for PhotocraftApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
         self.poll_file_dialog(ctx, Some(frame));
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut sam3 = std::mem::take(&mut self.sam3);
+            sam3.tick(self, ctx);
+            self.sam3 = sam3;
+        }
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
@@ -2084,6 +2115,8 @@ impl eframe::App for PhotocraftApp {
         gradient_ui::editor_window(self, &ctx);
         type_panels_ui::windows(self, &ctx);
         analysis_ui::windows(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        sam3_panel::show(self, &ctx);
         timeline_ui::windows(self, &ctx);
         workspace_ui::windows(self, &ctx);
         palette::show(self, &ctx);
